@@ -1,0 +1,63 @@
+[
+  {
+    "label": "Flash current sketch",
+    "command": "make",
+    "args": ["flash-$(basename \"$ZED_DIRNAME\")"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Compile current sketch",
+    "command": "make",
+    "args": ["$(basename \"$ZED_DIRNAME\")"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Compile all sketches",
+    "command": "make",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "List sketches",
+    "command": "make",
+    "args": ["list"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Probe ST-Link",
+    "command": "make",
+    "args": ["probe"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Clean build",
+    "command": "make",
+    "args": ["clean"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "Serial monitor",
+    "command": "picocom",
+    "args": ["-b", "115200", "/dev/ttyACM0"],
+    "reveal": "always",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": true
+  }
+]
