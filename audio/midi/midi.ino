@@ -6,8 +6,9 @@
 // MIDI File into song.h, a flat list of timed note events; to play another
 // song, regenerate it:
 //   python3 tools/midi2h.py path/to/song.mid
-// then rebuild.  The song plays once; press the KEY button (PA0) to play it
-// again.  The title, then the CPU load, voice use and clipping, are printed
+// then rebuild.  To hear a song before converting it, see tools/midiplay.py
+// (its --board option renders it with this sketch's own synthesis).  The
+// song plays once; press the KEY button (PA0) to play it again.  The title, then the CPU load, voice use and clipping, are printed
 // on the USB serial port (/dev/ttyACM0).
 //
 // Instruments: each MIDI channel's General MIDI program picks one of a dozen
@@ -163,6 +164,12 @@ uint32_t blockBeingPlayed() {
   const uint32_t wordsDone = RING_WORDS - TX_DMA->NDTR;
   return (wordsDone / BLOCK_WORDS) % RING_BLOCKS;
 }
+
+// >>> portable synthesis
+// From here to the "<<< portable synthesis" line, the code touches no
+// hardware except digitalRead() for KEY: tools/midiplay.py --board compiles
+// it on the PC, with LEAF, to preview a song exactly as this sketch plays it.
+// It relies on SAMPLE_RATE, SAMPLES_PER_MS and BLOCK_FRAMES, defined above.
 
 // ---------------------------------------------------------------------------
 // LEAF
@@ -660,6 +667,8 @@ void renderBlock(int16_t *out) {
   }
   sampleClock += BLOCK_FRAMES;
 }
+
+// <<< portable synthesis
 
 // ---------------------------------------------------------------------------
 // Reporting, with the Cortex-M4 cycle counter for the CPU load

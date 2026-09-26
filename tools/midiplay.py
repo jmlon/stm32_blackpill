@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
-"""Preview a MIDI file on the PC with the AMY synthesizer, before converting it.
+"""Preview a MIDI file on the PC, before converting it for audio/midi.
 
-    python tools/midiplay.py song.mid [--wav song.wav] [--start 10] [--seconds 30]
+    python3 tools/midiplay.py song.mid [--board] [--wav song.wav]
+                                       [--start 10] [--seconds 30]
 
-Plays the song as tools/midi2h.py sees it: the same parser, so the same
-notes, velocities (with channel volume folded in) and dropped drums.  Each
-channel's General MIDI instrument is played with the closest of AMY's
-built-in DX7 presets, and channel 10 with AMY's GM drum kit.  So this is a
-preview of the song itself, its arrangement and how busy it is, not of the
-2-operator FM patches the Black Pill will use (audio/midi).
+Both modes play the song as tools/midi2h.py sees it: the same parser, so the
+same notes, velocities (with channel volume folded in) and dropped drums.
 
-The song is rendered offline, which takes a fraction of a second, then
-normalized, written to a WAV file and played with the system's player
-(paplay, aplay or ffplay on Linux; afplay on macOS).
-
-AMY's Python module is compiled from the AMY sources; tools/install-amy-python.sh
-installs it into a virtual environment, .venv, in the repository:
+By default the song is played with the AMY synthesizer: each channel's
+General MIDI instrument with the closest of AMY's built-in DX7 presets, and
+channel 10 with AMY's GM drum kit.  This previews the song itself, its
+arrangement and how busy it is, with richer sounds than the board makes.
+AMY's Python module is compiled from the AMY sources;
+tools/install-amy-python.sh installs it into .venv in the repository:
 
     tools/install-amy-python.sh
     .venv/bin/python tools/midiplay.py song.mid
 
-AMY's Python build does not support Windows; there, convert with midi2h.py
-and preview on the board.
+With --board, the song is rendered exactly as the Black Pill plays it: the
+audio/midi sketch's own synthesis code (the part between its "portable
+synthesis" markers) is compiled on the PC together with LEAF, with the same
+patches, drums, 8 voices, voice stealing, sample rate and output level.
+It needs a C/C++ compiler (gcc and g++, or $CC and $CXX) and LEAF
+(tools/install-leaf.sh), but not AMY; LEAF is compiled once and cached in
+build/midiplay-board.  The output is not normalized, so loudness and any
+clipping are the board's.
+
+Either way the song is rendered offline, written to a WAV file and played
+with the system's player (paplay, aplay or ffplay on Linux; afplay on
+macOS).  AMY's Python build does not support Windows; --board might, with
+MinGW, but is untested there.
 """
 
 import argparse
@@ -33,15 +41,25 @@ import sys
 import tempfile
 import wave
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(TOOLS)
+sys.path.insert(0, TOOLS)
 import midi2h  # noqa: E402  (same directory)
 
-try:
-    import amy
-    import numpy as np
-except ImportError as e:
-    sys.exit(f"{e}.  Install AMY's Python module first: tools/install-amy-python.sh, "
-             "then run this with .venv/bin/python")
+amy = None
+np = None
+
+
+def load_amy():
+    """Imports AMY and numpy, which only the AMY mode needs."""
+    global amy, np
+    try:
+        import amy as amy_module
+        import numpy as numpy_module
+    except ImportError as e:
+        sys.exit(f"{e}.  Install AMY's Python module first: tools/install-amy-python.sh, "
+                 "then run this with .venv/bin/python (or use --board)")
+    amy, np = amy_module, numpy_module
 
 DRUM_CHANNEL = midi2h.DRUM_CHANNEL
 DRUM_KIT_PATCH = 384  # AMY's first Gamma9001 General MIDI drum kit
@@ -185,7 +203,8 @@ def quiet_c_stderr():
         os.close(saved)
 
 
-def render(song, start_s, seconds):
+def render_amy(song, start_s, seconds):
+    """Returns (16-bit PCM bytes, sample rate, channels, voices per channel)."""
     events = song["events"]
     peaks = voices_needed(events)
     voices = plan_voices(peaks)
@@ -239,17 +258,188 @@ def render(song, start_s, seconds):
         rendered += 1
 
     audio = np.array(out, dtype=np.float32).reshape(-1, amy.AMY_NCHANS)
-    return audio, rate, voices
-
-
-def write_wav(path, audio, rate):
     peak = float(np.abs(audio).max()) or 1.0
-    scaled = (audio * (0.89 * 32767 / peak)).astype(np.int16)  # -1 dBFS
+    pcm = (audio * (0.89 * 32767 / peak)).astype(np.int16)  # normalize to -1 dBFS
+    return pcm.tobytes(), rate, amy.AMY_NCHANS, voices
+
+
+# ---------------------------------------------------------------------------
+# --board: the audio/midi sketch's own synthesis, compiled on the PC
+
+SKETCH = os.path.join(REPO, "audio", "midi", "midi.ino")
+BOARD_BUILD = os.path.join(REPO, "build", "midiplay-board")
+LEAF_SRC = os.environ.get("LEAF_SRC",
+                          os.path.expanduser("~/Arduino/libraries/LEAF/src"))
+PORTABLE_BEGIN = "// >>> portable synthesis"
+PORTABLE_END = "// <<< portable synthesis"
+
+# Stands in for the sketch's setup() and loop(): renders the song from the
+# start, writes the frames from start_s on, and prints what the board's
+# serial report would.  KEY is never pressed, so it stops after one pass.
+RENDERER = r"""
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include "leaf.h"
+#include "song.h"
+
+#ifndef PI
+#define PI 3.14159265358979f
+#endif
+#define USER_BTN 0
+#define LOW 0
+#define HIGH 1
+static int digitalRead(int) { return HIGH; }
+
+namespace {
+constexpr uint32_t SAMPLE_RATE = BOARD_SAMPLE_RATE;
+constexpr uint32_t SAMPLES_PER_MS = SAMPLE_RATE / 1000;
+constexpr uint32_t BLOCK_FRAMES = BOARD_BLOCK_FRAMES;
+#include "portable.inc"
+}  // namespace
+
+int main(int argc, char **argv) {
+  if (argc != 4) {
+    fprintf(stderr, "usage: %s out.raw start_s seconds\n", argv[0]);
+    return 2;
+  }
+  FILE *out = fopen(argv[1], "wb");
+  if (!out) {
+    perror(argv[1]);
+    return 1;
+  }
+  const uint64_t startFrame = (uint64_t)(atof(argv[2]) * SAMPLE_RATE);
+  const double seconds = atof(argv[3]);
+  const uint64_t lastFrame =
+      seconds > 0 ? startFrame + (uint64_t)(seconds * SAMPLE_RATE)
+                  : (uint64_t)(SONG_LENGTH_MS / 1000 + 60) * SAMPLE_RATE;
+
+  LEAF_init(&leaf, SAMPLE_RATE, leafMemory, sizeof(leafMemory), randomNumber);
+  for (Voice &v : voices) v.init();
+  for (DrumVoice &d : drums) d.init();
+  startSong();
+
+  int16_t block[BLOCK_FRAMES * 2];
+  uint64_t frame = 0;
+  uint32_t clipped = 0;
+  unsigned peak = 0;
+  while (playing && frame < lastFrame) {
+    renderBlock(block);
+    if (frame + BLOCK_FRAMES > startFrame) {
+      fwrite(block, sizeof(block[0]), BLOCK_FRAMES * 2, out);
+    }
+    frame += BLOCK_FRAMES;
+    clipped += clippedSamples;
+    clippedSamples = 0;
+    if (peakVoicesInUse > peak) peak = peakVoicesInUse;
+    peakVoicesInUse = 0;
+  }
+  fclose(out);
+  printf("rate %u\nstolen %u\nclipped %u\npeak_voices %u\nvoices %u\npool %u %u\n",
+         (unsigned)SAMPLE_RATE, (unsigned)stolenVoices, (unsigned)clipped, peak,
+         (unsigned)MELODIC_VOICES, (unsigned)leaf_pool_get_used(&leaf),
+         (unsigned)sizeof(leafMemory));
+  return 0;
+}
+"""
+
+
+def sketch_parameters(text):
+    """The sketch's sample rate (from its I2S clock settings) and block size."""
+    import re
+
+    def const(name):
+        m = re.search(rf"constexpr uint32_t {name} = (\d+);", text)
+        if not m:
+            sys.exit(f"{SKETCH}: cannot find {name}")
+        return int(m.group(1))
+
+    m = re.search(r"I2S_CLK_HZ = (\d+) / PLLI2S_M", text)
+    if not m:
+        sys.exit(f"{SKETCH}: cannot find I2S_CLK_HZ")
+    i2s_clock = int(m.group(1)) // const("PLLI2S_M") * const("PLLI2S_N") // const("PLLI2S_R")
+    rate = i2s_clock // (32 * (2 * const("I2S_DIV") + const("I2S_ODD")))
+    return rate, const("BLOCK_FRAMES")
+
+
+def run(cmd):
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode:
+        sys.exit(f"{' '.join(cmd[:2])}... failed:\n{result.stderr[-3000:]}")
+    return result.stdout
+
+
+def leaf_objects(cc):
+    """Compiles LEAF's C sources once; recompiles when they change."""
+    sources = sorted(
+        os.path.join(d, f)
+        for d in (os.path.join(LEAF_SRC, "Src"), os.path.join(LEAF_SRC, "Externals"))
+        if os.path.isdir(d) for f in os.listdir(d) if f.endswith(".c"))
+    if not sources:
+        sys.exit(f"LEAF not found in {LEAF_SRC}: run tools/install-leaf.sh "
+                 "(or set LEAF_SRC)")
+    obj_dir = os.path.join(BOARD_BUILD, "leaf")
+    os.makedirs(obj_dir, exist_ok=True)
+    stamp = f"{LEAF_SRC}\n{max(os.path.getmtime(s) for s in sources)}\n{cc}\n"
+    stamp_path = os.path.join(obj_dir, "stamp")
+    objects = [os.path.join(obj_dir, os.path.basename(s)[:-2] + ".o") for s in sources]
+    if (os.path.exists(stamp_path) and open(stamp_path).read() == stamp
+            and all(os.path.exists(o) for o in objects)):
+        return objects
+    print(f"compiling LEAF ({len(sources)} files, once)...")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor() as pool:
+        list(pool.map(lambda so: run([cc, "-O2", "-w", "-I", LEAF_SRC, "-c", so[0], "-o", so[1]]),
+                      zip(sources, objects)))
+    with open(stamp_path, "w") as f:
+        f.write(stamp)
+    return objects
+
+
+def render_board(song, midi_path, start_s, seconds):
+    """Returns (16-bit PCM bytes, sample rate, channels, report)."""
+    cc = os.environ.get("CC", "gcc")
+    cxx = os.environ.get("CXX", "g++")
+    for tool in (cc, cxx):
+        if not shutil.which(tool):
+            sys.exit(f"--board needs a C/C++ compiler: {tool} not found (set CC/CXX)")
+
+    text = open(SKETCH).read()
+    if text.count(PORTABLE_BEGIN) != 1 or text.count(PORTABLE_END) != 1:
+        sys.exit(f"{SKETCH}: expected one '{PORTABLE_BEGIN}' and one '{PORTABLE_END}' line")
+    portable = text[text.index(PORTABLE_BEGIN):text.index(PORTABLE_END)]
+    rate, block = sketch_parameters(text)
+
+    objects = leaf_objects(cc)
+    os.makedirs(BOARD_BUILD, exist_ok=True)
+    midi2h.write_header(song, midi_path, os.path.join(BOARD_BUILD, "song.h"))
+    with open(os.path.join(BOARD_BUILD, "portable.inc"), "w") as f:
+        f.write(portable)
+    renderer_cpp = os.path.join(BOARD_BUILD, "renderer.cpp")
+    with open(renderer_cpp, "w") as f:
+        f.write(RENDERER)
+    exe = os.path.join(BOARD_BUILD, "renderer.exe" if sys.platform == "win32" else "renderer")
+    run([cxx, "-O2", "-w", f"-DBOARD_SAMPLE_RATE={rate}", f"-DBOARD_BLOCK_FRAMES={block}",
+         "-I", LEAF_SRC, "-I", BOARD_BUILD, renderer_cpp, *objects, "-lm", "-o", exe])
+
+    raw = os.path.join(BOARD_BUILD, "out.raw")
+    report = {}
+    for line in run([exe, raw, str(start_s), str(seconds or 0)]).splitlines():
+        key, *values = line.split()
+        report[key] = [int(v) for v in values]
+    with open(raw, "rb") as f:
+        pcm = f.read()
+    os.remove(raw)
+    return pcm, report["rate"][0], 2, report
+
+
+def write_wav(path, pcm, rate, channels):
     with wave.open(path, "wb") as w:
-        w.setnchannels(audio.shape[1])
+        w.setnchannels(channels)
         w.setsampwidth(2)
         w.setframerate(rate)
-        w.writeframes(scaled.tobytes())
+        w.writeframes(pcm)
 
 
 def play(path):
@@ -269,6 +459,8 @@ def play(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("midi", help="Standard MIDI File (.mid)")
+    parser.add_argument("--board", action="store_true",
+                        help="render with the audio/midi sketch's own synthesis")
     parser.add_argument("--wav", help="keep the rendered audio in this WAV file")
     parser.add_argument("--start", type=float, default=0, help="start at this second")
     parser.add_argument("--seconds", type=float, help="play only this many seconds")
@@ -280,20 +472,31 @@ def main():
     except (OSError, ValueError, IndexError) as e:
         sys.exit(f"{args.midi}: {e}")
 
-    with quiet_c_stderr():
-        audio, rate, voices = render(song, args.start, args.seconds)
-
     print(f"{song['title']}: {song['length_ms'] / 1000:.1f} s, "
           f"at most {song['polyphony']} notes at once "
           f"(the Black Pill plays 8 melodic voices)")
-    for channel in sorted(song["notes"]):
-        if channel == DRUM_CHANNEL:
-            print(f"  channel {channel + 1:2d}: drums -> AMY GM drum kit, "
-                  f"{voices.get(channel)} voices")
-            continue
-        program = song["programs"].get(channel, 0)
-        print(f"  channel {channel + 1:2d}: {midi2h.GM_PROGRAMS[program]}"
-              f" -> DX7 {GM_TO_DX7[program]}, {voices.get(channel)} voices")
+    if args.board:
+        pcm, rate, channels, report = render_board(song, args.midi, args.start, args.seconds)
+        for channel in sorted(song["notes"]):
+            name = ("drums" if channel == DRUM_CHANNEL
+                    else midi2h.GM_PROGRAMS[song["programs"].get(channel, 0)])
+            print(f"  channel {channel + 1:2d}: {name}")
+        print(f"  board: {rate} Hz, {report['peak_voices'][0]} of {report['voices'][0]} "
+              f"voices in use at most, {report['stolen'][0]} notes stolen, "
+              f"{report['clipped'][0]} samples clipped, "
+              f"LEAF pool {report['pool'][0]} of {report['pool'][1]} bytes")
+    else:
+        load_amy()
+        with quiet_c_stderr():
+            pcm, rate, channels, voices = render_amy(song, args.start, args.seconds)
+        for channel in sorted(song["notes"]):
+            if channel == DRUM_CHANNEL:
+                print(f"  channel {channel + 1:2d}: drums -> AMY GM drum kit, "
+                      f"{voices.get(channel)} voices")
+                continue
+            program = song["programs"].get(channel, 0)
+            print(f"  channel {channel + 1:2d}: {midi2h.GM_PROGRAMS[program]}"
+                  f" -> DX7 {GM_TO_DX7[program]}, {voices.get(channel)} voices")
     for text, count in song["warnings"].items():
         print(f"  warning: {text} ({count}x)")
     if song["dropped_drums"]:
@@ -304,12 +507,12 @@ def main():
     if not path:
         handle, path = tempfile.mkstemp(suffix=".wav")
         os.close(handle)
-    write_wav(path, audio, rate)
+    write_wav(path, pcm, rate, channels)
     if args.wav:
         print(f"wrote {path}")
     try:
         if not args.no_play:
-            print(f"playing {len(audio) / rate:.1f} s (Ctrl+C to stop)")
+            print(f"playing {len(pcm) / (2 * channels * rate):.1f} s (Ctrl+C to stop)")
             play(path)
     except KeyboardInterrupt:
         pass
