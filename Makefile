@@ -4,8 +4,10 @@
 #
 #     blink/blink.ino
 #     serial-echo/serial-echo.ino
+#     audio/fmsynth/fmsynth.ino
 #
-# New directories are picked up automatically -- no edits here.
+# New directories are picked up automatically, at the repo root or inside a
+# group directory in SKETCH_GROUPS -- a new group is the only edit needed.
 #
 #     make                  build every sketch
 #     make blink            build one
@@ -26,9 +28,11 @@ FLASH_ADDR := 0x8000000
 EXPECTED_SP := 20020000
 
 # A directory is a sketch only if it contains <dir>/<dir>.ino.
-# Sketches may live at the repo root or under modules/.
+# Sketches may live at the repo root or one level under a group directory
+# listed in SKETCH_GROUPS.  Sketch names must be unique across all of them.
+SKETCH_GROUPS := modules audio
 dirname  = $(notdir $(patsubst %/,%,$1))
-SKETCH_DIRS := $(sort $(foreach d,$(wildcard */) $(wildcard modules/*/), \
+SKETCH_DIRS := $(sort $(foreach d,$(wildcard */) $(foreach g,$(SKETCH_GROUPS),$(wildcard $(g)/*/)), \
                  $(if $(wildcard $(d)$(call dirname,$(d)).ino),$(d))))
 SKETCHES := $(foreach d,$(SKETCH_DIRS),$(call dirname,$(d)))
 sketchdir = $(filter $(1)/ %/$(1)/,$(SKETCH_DIRS))
@@ -40,12 +44,14 @@ SKETCH ?= $(firstword $(SKETCHES))
 
 all: $(SKETCHES)
 
-# A sketch may ship a build-flags.txt with extra compiler.cpp.extra_flags
-# (e.g. library configuration macros normally set via a global header), a
+# A sketch may ship a build-flags.txt with extra compiler flags (e.g. library
+# configuration macros normally set via a global header, or -O2), a
 # compat.h force-included ahead of every translation unit (e.g. to patch
 # missing declarations in a third-party library without editing it), and/or
 # a compat_includes/ directory added to the include search path (e.g. to
-# shim a missing/case-mismatched header a library expects).
+# shim a missing/case-mismatched header a library expects).  They apply to
+# every C and C++ translation unit, libraries included, since many libraries
+# (AMY, for one) are written in C.
 extra_flags = $(strip \
   $(if $(wildcard $(call sketchdir,$(1))build-flags.txt),$(file <$(call sketchdir,$(1))build-flags.txt)) \
   $(if $(wildcard $(call sketchdir,$(1))compat.h),-include $(abspath $(call sketchdir,$(1))compat.h)) \
@@ -54,7 +60,7 @@ extra_flags = $(strip \
 # Per-sketch build, check and flash targets.
 define SKETCH_RULES
 $(BUILD_DIR)/$(1)/$(1).ino.bin: $(wildcard $(call sketchdir,$(1))*.ino $(call sketchdir,$(1))*.h $(call sketchdir,$(1))*.cpp $(call sketchdir,$(1))*.c $(call sketchdir,$(1))build-flags.txt)
-	arduino-cli compile -b "$(FQBN)" --output-dir $(BUILD_DIR)/$(1) $(if $(call extra_flags,$(1)),--build-property "compiler.cpp.extra_flags=$(call extra_flags,$(1))") $(call sketchdir,$(1))
+	arduino-cli compile -b "$(FQBN)" --output-dir $(BUILD_DIR)/$(1) $(if $(call extra_flags,$(1)),--build-property "compiler.c.extra_flags=$(call extra_flags,$(1))" --build-property "compiler.cpp.extra_flags=$(call extra_flags,$(1))") $(call sketchdir,$(1))
 
 .PHONY: $(1) check-$(1) flash-$(1)
 
