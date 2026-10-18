@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert a Standard MIDI File into a C header for audio/midi.
 
-    python3 tools/midi2h.py song.mid [-o audio/midi/song.h]
+    uv run tools/midi2h.py song.mid [-o audio/midi/song.h]
 
 Needs only the Python standard library, so it runs as is on Linux, macOS or
 Windows ("py tools\\midi2h.py song.mid").

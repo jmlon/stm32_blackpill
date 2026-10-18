@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Preview a MIDI file on the PC, before converting it for audio/midi.
 
-    python3 tools/midiplay.py song.mid [--board] [--wav song.wav]
-                                       [--start 10] [--seconds 30]
+    uv run tools/midiplay.py song.mid [--board] [--wav song.wav]
+                                      [--start 10] [--seconds 30]
 
 Both modes play the song as tools/midi2h.py sees it: the same parser, so the
 same notes, velocities (with channel volume folded in) and dropped drums.
@@ -11,11 +11,11 @@ By default the song is played with the AMY synthesizer: each channel's
 General MIDI instrument with the closest of AMY's built-in DX7 presets, and
 channel 10 with AMY's GM drum kit.  This previews the song itself, its
 arrangement and how busy it is, with richer sounds than the board makes.
-AMY's Python module is compiled from the AMY sources;
-tools/install-amy-python.sh installs it into .venv in the repository:
+AMY's Python module is a C extension that uv compiles from the AMY git
+repository (pinned in pyproject.toml) the first time it syncs:
 
-    tools/install-amy-python.sh
-    .venv/bin/python tools/midiplay.py song.mid
+    uv sync
+    uv run tools/midiplay.py song.mid
 
 With --board, the song is rendered exactly as the Black Pill plays it: the
 audio/midi sketch's own synthesis code (the part between its "portable
@@ -57,8 +57,8 @@ def load_amy():
         import amy as amy_module
         import numpy as numpy_module
     except ImportError as e:
-        sys.exit(f"{e}.  Install AMY's Python module first: tools/install-amy-python.sh, "
-                 "then run this with .venv/bin/python (or use --board)")
+        sys.exit(f"{e}.  Run uv sync first, "
+                 "then run this with uv run (or use --board)")
     amy, np = amy_module, numpy_module
 
 DRUM_CHANNEL = midi2h.DRUM_CHANNEL

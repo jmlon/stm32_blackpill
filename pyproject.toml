@@ -1,0 +1,21 @@
+[project]
+name = "stm32-blackpill-tools"
+version = "0.1.0"
+description = "Companion helper tools (MIDI conversion and playback) for the STM32 Black Pill projects"
+readme = "README.md"
+requires-python = ">=3.12"
+# AMY is compiled (a C extension) from its git tag; keep the tag in line with
+# the version of the AMY Synthesizer Arduino library the sketches use.
+dependencies = [
+    "amy",
+    "numpy",
+    "soundfile",
+]
+
+# Helper scripts in tools/ run in place (uv run tools/midiplay.py); there is
+# nothing to build or install.
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+amy = { git = "https://github.com/shorepine/amy", tag = "1.2.180" }
