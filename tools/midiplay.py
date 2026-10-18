@@ -442,18 +442,23 @@ def write_wav(path, pcm, rate, channels):
         w.writeframes(pcm)
 
 
+def player_command():
+    """The first audio player found (a command to append a WAV file to), or None."""
+    players = [["afplay"]] if sys.platform == "darwin" else [
+        ["paplay"], ["aplay", "-q"], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]]
+    return next((p for p in players if shutil.which(p[0])), None)
+
+
 def play(path):
     if sys.platform == "win32":
         import winsound
         winsound.PlaySound(path, winsound.SND_FILENAME)
         return
-    players = [["afplay"]] if sys.platform == "darwin" else [
-        ["paplay"], ["aplay", "-q"], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]]
-    for player in players:
-        if shutil.which(player[0]):
-            subprocess.run(player + [path], check=False)
-            return
-    print(f"no audio player found; open {path} yourself")
+    player = player_command()
+    if player:
+        subprocess.run(player + [path], check=False)
+    else:
+        print(f"no audio player found; open {path} yourself")
 
 
 def main():

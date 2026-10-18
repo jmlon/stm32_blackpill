@@ -8,12 +8,13 @@ Sketches and notes on audio synthesis for the Black Pill:
 
 ## Python tools
 
-Two helper scripts in `../tools` prepare and preview songs for `midi/`:
+Three helper scripts in `../tools` prepare and preview songs for `midi/`:
 
 | Script | What it does |
 |---|---|
 | `tools/midi2h.py` | Converts a Standard MIDI File into a C header (`song.h`) for the sketch. |
 | `tools/midiplay.py` | Plays a MIDI file on the PC, before converting it. |
+| `tools/miditui.py` | Text-mode browser and player: lists a file's tracks and plays them, with parts muted. |
 
 They are managed with [uv](https://docs.astral.sh/uv/), which creates the
 virtual environment (`.venv`) and installs the dependencies listed in
@@ -68,9 +69,52 @@ uv run tools/midiplay.py song.mid --wav song.wav --no-play
 
 Run `uv run tools/midiplay.py -h` for all options.
 
+### Browse a song and mute parts
+
+```sh
+uv run tools/miditui.py [song.mid]
+```
+
+A text-mode (curses) interface that shows the file's length, tracks, events
+and tempo, and lists its parts: one row per track and channel with notes, with
+the track name, the General MIDI instrument and the number of notes.  It plays
+the song like `midiplay.py`, with AMY or, from *Options*, as the board plays
+it.  Unchecked parts are left out, so an instrument can be heard alone or
+without it.
+
+To choose what goes to the board, uncheck the parts to leave out, listen,
+and use *File > Save song.h* (`h`; it defaults to `audio/midi/song.h`).  The
+header holds only the checked parts and lists the left-out ones in its
+comment.  *File > Save WAV* also saves only the checked parts.  `midi2h.py`
+still converts whole files, for batch jobs.
+
+| Key | Action |
+|---|---|
+| Up / Down, PgUp / PgDn | Select a part |
+| Space | Check / uncheck the part |
+| `a` / `n` | Check all / none |
+| `p` | Play / pause |
+| `s` | Stop |
+| Left / Right | Seek 5 s back / forward |
+| Home | Back to the start |
+| `g` | Go to a time (`1:23.5` or `83.5`) |
+| `o` | Open a file (a browser; Backspace goes up a directory) |
+| `h` | Save the checked parts as `song.h` for the sketch |
+| `w` | Save the checked parts as a WAV file |
+| `e` | Switch engine (AMY / board) |
+| F10 or Esc, Alt+F/P/O | Menus |
+| `q` | Quit |
+
+The song is rendered offline, once for each set of checked parts and each
+engine, and then played with the system's player.  The first play, or the
+first after a change, waits for that render: under a second for AMY, a few
+seconds for the board.  Changing the parts while playing re-renders the song
+and resumes at the same point.
+
 ### Notes
 
 - Add a dependency with `uv add <package>`; it updates `pyproject.toml` and
   `uv.lock`.  Commit both.
-- AMY's Python build does not support Windows.  `midi2h.py` runs anywhere
+- AMY's Python build does not support Windows, and Python's `curses` module,
+  which `miditui.py` needs, is not available there.  `midi2h.py` runs anywhere
   (`py tools\midi2h.py song.mid`).
