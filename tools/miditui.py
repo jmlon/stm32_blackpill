@@ -346,6 +346,7 @@ class App:
 
     def put(self, y, x, text, attr=0):
         """Writes text clipped to the screen."""
+        text = "".join(c if c.isprintable() else " " for c in text)
         h, w = self.screen.getmaxyx()
         if 0 <= y < h and 0 <= x < w:
             try:

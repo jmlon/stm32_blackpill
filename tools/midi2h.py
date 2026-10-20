@@ -114,7 +114,13 @@ def parse_track(track, index):
             if kind == 0x51:
                 yield tick, order, index, "tempo", (int.from_bytes(payload, "big"),)
             elif kind == 0x03 and payload:
-                yield tick, order, index, "name", (payload.decode("latin-1"),)
+                # Some files end names C-style, with a NUL; drop it and any
+                # other control characters, which a C string or a terminal
+                # would not take.
+                text = payload.split(b"\0")[0].decode("latin-1")
+                text = "".join(c if c.isprintable() else " " for c in text).strip()
+                if text:
+                    yield tick, order, index, "name", (text,)
             elif kind == 0x2F:
                 yield tick, order, index, "end", ()
             else:
